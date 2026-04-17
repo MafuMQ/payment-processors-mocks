@@ -2,6 +2,28 @@
 
 Mock APIs for various payment processors with persistent state tracking.
 
+## Quick Start (GCP VM)
+
+```bash
+# 1. Upload files and setup
+./setup.sh
+
+# 2. Start API (survives SSH disconnect)
+./start.sh
+
+# 3. Configure firewall to allow port 8080
+
+# 4. Test
+curl http://YOUR_VM_IP:8080/health
+```
+
+**Commands:**
+- `./start.sh` - Start API in background
+- `./stop.sh` - Stop API
+- `tail -f api.log` - View logs
+
+---
+
 ## Payshap API Mock
 
 A stateful Flask application that mocks the Payshap payment API with realistic state transitions.
@@ -78,23 +100,69 @@ Health check endpoint.
 
 ### Option 1: GCP Compute Engine (Recommended for Persistence)
 
-#### Quick Deploy
+#### Simple Setup (Home Directory)
+
+1. **Upload files to your VM:**
 ```bash
-# 1. Edit deploy-gcp.sh and set your PROJECT_ID
-# 2. Run deployment script
-chmod +x deploy-gcp.sh
-./deploy-gcp.sh
+# From your local machine (if you have gcloud)
+gcloud compute scp --recurse . payshap-mock-api:~/payment-processors-mocks --zone=us-central1-a
 
-# 3. Copy files to instance
-gcloud compute scp app.py requirements.txt payshap-mock-api:/opt/payshap-mock --zone=us-central1-a
-
-# 4. SSH and start service
-gcloud compute ssh payshap-mock-api --zone=us-central1-a
-cd /opt/payshap-mock
-sudo systemctl start payshap-mock
+# Or manually upload via GCP Console SSH
 ```
 
-#### Manual Setup
+2. **SSH into VM and setup:**
+```bash
+cd ~/payment-processors-mocks
+chmod +x setup.sh start.sh stop.sh
+./setup.sh
+```
+
+3. **Start the API (survives SSH disconnect):**
+```bash
+./start.sh
+```
+
+4. **Configure Firewall:**
+   - Go to [GCP Firewall Rules](https://console.cloud.google.com/networking/firewalls/list)
+   - Create rule for `tcp:8080` from `0.0.0.0/0`
+   - Or: `gcloud compute firewall-rules create allow-payshap-8080 --allow=tcp:8080`
+
+5. **Access your API:**
+```bash
+# Get your external IP
+curl ifconfig.me
+
+# Test from anywhere
+curl http://YOUR_EXTERNAL_IP:8080/health
+```
+
+**Useful Commands:**
+```bash
+./start.sh          # Start API in background
+./stop.sh           # Stop API
+tail -f api.log     # View logs
+```
+
+#### Production Setup (systemd service)
+
+For auto-restart on VM reboot:
+
+```bash
+cd ~/payment-processors-mocks
+chmod +x install-service.sh
+./install-service.sh
+
+# Start the service
+sudo systemctl start payshap-mock
+
+# Check status
+sudo systemctl status payshap-mock
+
+# View logs
+sudo journalctl -u payshap-mock -f
+```
+
+#### Manual Setup (Advanced)
 ```bash
 # Create VM instance
 gcloud compute instances create payshap-mock-api \
@@ -146,29 +214,43 @@ python app.py
 
 ## Testing
 
-### Test Script
+### Local Testing
+```bash
+python test_api.py
+```
+
+### Testing Remote GCP Instance
+
+1. **Update test_api.py with your VM's external IP:**
+```python
+BASE_URL = "http://YOUR_EXTERNAL_IP:8080"
+```
+
+2. **Run the test:**
 ```bash
 python test_api.py
 ```
 
 ### Manual Testing
 ```bash
+# Replace localhost with your VM IP if testing remotely
+API_URL="http://localhost:8080"  # or http://YOUR_EXTERNAL_IP:8080
 # Create a transaction
-TRANSACTION_ID=$(curl -X POST http://localhost:8080/api/payshap \
+TRANSACTION_ID=$(curl -X POST $API_URL/api/payshap \
   -H "Content-Type: application/json" \
   -d '{"shap_id_sender":"test1","shap_id_receiver":"test2","amount":50}' \
   | jq -r '.transaction_id')
 
 # Check status immediately (should be "initiated")
-curl "http://localhost:8080/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
+curl "$API_URL/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
 
 # Wait 2 seconds and check again (should be "pending")
 sleep 2
-curl "http://localhost:8080/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
+curl "$API_URL/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
 
 # Wait 4 more seconds and check again (should be "completed" or "failed")
 sleep 4
-curl "http://localhost:8080/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
+curl "$API_URL/api/payshap-status?transaction_id=$TRANSACTION_ID" | jq
 ```
 
 ---
@@ -228,17 +310,66 @@ For production loads, consider:
 
 ## Monitoring
 
-### Check Service Status (GCP VM)
+### Check if API is Running
 ```bash
-sudo systemctl status payshap-mock
+# Check process
+ps aux | grep 'python3 app.py'
+
+# Test endpoint
+curl http://localhost:8080/health
 ```
 
 ### View Logs
+
+**If using nohup/start.sh:**
+```bash
+tail -f ~/payment-processors-mocks/api.log
+```
+
+**If using systemd service:**
 ```bash
 sudo journalctl -u payshap-mock -f
 ```
 
+### Check Service Status (systemd)
+```bash
+sudo systemctl status payshap-mock
+```
+
 ### Database Inspection
 ```bash
-sqlite3 payshap.db "SELECT * FROM transactions ORDER BY created_at DESC LIMIT 10;"
+sqlite3 ~/payment-processors-mocks/payshap.db "SELECT * FROM transactions ORDER BY created_at DESC LIMIT 10;"
+```
+
+---
+
+## Troubleshooting
+
+### API stops when I close SSH
+Use one of these methods:
+- **nohup**: `./start.sh` (simplest)
+- **systemd**: `./install-service.sh` then `sudo systemctl start payshap-mock`
+- **screen**: `screen -S api` then `python3 app.py` (Ctrl+A, D to detach)
+
+### Can't connect from outside
+1. Check firewall: `gcloud compute firewall-rules list | grep 8080`
+2. Create rule: `gcloud compute firewall-rules create allow-payshap-8080 --allow=tcp:8080`
+3. Or use GCP Console: [Firewall Rules](https://console.cloud.google.com/networking/firewalls/list)
+
+### API not responding
+```bash
+# Check if running
+ps aux | grep 'python3 app.py'
+
+# Check logs
+tail -50 ~/payment-processors-mocks/api.log
+
+# Restart
+./stop.sh && ./start.sh
+```
+
+### Permission denied errors
+```bash
+# Make scripts executable
+chmod +x setup.sh start.sh stop.sh install-service.sh
 ```

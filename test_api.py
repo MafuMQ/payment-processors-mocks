@@ -3,7 +3,7 @@ import json
 import time
 
 # Test the Payshap mock API
-BASE_URL = "http://localhost:8080"  # Change to your GCP VM IP when deployed
+BASE_URL = "http://34.67.233.58:8080"  # Change to your GCP VM IP when deployed
 
 def test_payment():
     """Test the payment endpoint with state transitions"""
@@ -55,6 +55,9 @@ def test_multiple_payments():
     print("\n\n🧪 Testing multiple payments for different statuses")
     print("-" * 50)
     
+    transactions = []
+    
+    # Create multiple transactions
     for i in range(5):
         print(f"\nPayment {i + 1}:")
         payload = {
@@ -64,11 +67,29 @@ def test_multiple_payments():
         }
         
         response = requests.post(f"{BASE_URL}/api/payshap", json=payload)
-        if response.status_code == 200:
+        if response.status_code in [200, 201]:
             result = response.json()
-            print(f"  Status: {result['status']}")
+            print(f"  Initial Status: {result['status']}")
             print(f"  Transaction ID: {result['transaction_id']}")
             print(f"  Amount: {result['amount']}")
+            transactions.append(result['transaction_id'])
+    
+    # Wait and check final status of all transactions
+    print(f"\n⏳ Waiting 7 seconds for transactions to complete...")
+    time.sleep(7)
+    
+    print("\n📊 Final Status of All Transactions:")
+    print("-" * 50)
+    for idx, txn_id in enumerate(transactions, 1):
+        status_response = requests.get(
+            f"{BASE_URL}/api/payshap-status",
+            params={"transaction_id": txn_id}
+        )
+        if status_response.status_code == 200:
+            status_data = status_response.json()
+            status = status_data.get('status')
+            amount = status_data.get('amount')
+            print(f"Transaction {idx}: {status:10} | Amount: ${amount} | ID: {txn_id[:8]}...")
 
 if __name__ == "__main__":
     try:

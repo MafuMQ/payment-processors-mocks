@@ -1,0 +1,17 @@
+[Unit]
+Description=Payshap Mock API Service
+After=network.target
+
+[Service]
+Type=simple
+User=%USERNAME%
+WorkingDirectory=%WORKDIR%
+Environment="PATH=%WORKDIR%/venv/bin"
+ExecStart=%WORKDIR%/venv/bin/python3 %WORKDIR%/app.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/payshap-mock.log
+StandardError=append:/var/log/payshap-mock.log
+
+[Install]
+WantedBy=multi-user.target
